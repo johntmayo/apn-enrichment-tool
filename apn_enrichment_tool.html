@@ -370,6 +370,11 @@
                 <label class="label" for="masterApnCol">Master APN column</label>
                 <select id="masterApnCol"></select>
               </div>
+              <div style="grid-column: 1 / -1;">
+                <label class="label" for="soldZipCol">Sold ZIP column (optional)</label>
+                <select id="soldZipCol"></select>
+                <p class="small" style="margin:6px 0 0;">When set, LA County parcel queries add a 5-digit ZIP match on <span class="mono">SitusZIP</span>. Choose “None” to ignore.</p>
+              </div>
             </div>
           </div>
 
@@ -390,18 +395,19 @@ Source"></textarea>
             <h3>LA County parcel lookup</h3>
             <label class="small" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;">
               <input type="checkbox" id="lacountyLookup" style="width:auto;margin-top:3px;" />
-              <span>After the master pass, query the public <span class="mono">LA_County_Parcels</span> layer for rows that still have no APN. Only a single parcel match is applied automatically; zero or multiple matches stay in the review queue. Requires network access from this page (browser CORS).</span>
+              <span>After the master pass, query the public <span class="mono">LA_County_Parcels</span> layer for rows that still have no APN. Only a single parcel match is applied automatically; zero or multiple matches stay in the review queue. Requires network access from this page (browser CORS). Uses the optional ZIP column when set.</span>
             </label>
           </div>
 
           <div class="stack">
             <button id="runFillApn" disabled>Run APN fill into sold file</button>
+            <button id="runCountyOnly" class="secondary" disabled>Run LA County lookup only</button>
             <button id="runWriteback" class="secondary" disabled>Run sold-data write-back into master</button>
             <button id="resetAll" class="ghost">Reset</button>
           </div>
 
           <div class="callout warn">
-            Master matching is deterministic (normalized address only). Optional LA County lookup uses the Assessor parcel snapshot on ArcGIS; it is throttled and only auto-fills when exactly one parcel matches the query.
+            Master matching is deterministic (normalized address only). LA County lookup uses the Assessor parcel snapshot on ArcGIS; optional ZIP narrows situs queries. Use “LA County lookup only” to re-run parcels on the last sold output (or raw sold) without redoing master. Throttled; only auto-fills when exactly one parcel matches.
           </div>
         </div>
       </aside>
@@ -481,7 +487,9 @@ Source"></textarea>
       sold: null,
       master: null,
       result: null,
-      mode: null
+      mode: null,
+      /** Last sold-side APN fill output (survives writeback so “County only” still works). */
+      soldFillBundle: null
     };
 
     const els = {
@@ -491,11 +499,13 @@ Source"></textarea>
       masterFileMeta: document.getElementById('masterFileMeta'),
       soldAddressCol: document.getElementById('soldAddressCol'),
       soldApnCol: document.getElementById('soldApnCol'),
+      soldZipCol: document.getElementById('soldZipCol'),
       masterAddressCol: document.getElementById('masterAddressCol'),
       masterApnCol: document.getElementById('masterApnCol'),
       writebackFields: document.getElementById('writebackFields'),
       lacountyLookup: document.getElementById('lacountyLookup'),
       runFillApn: document.getElementById('runFillApn'),
+      runCountyOnly: document.getElementById('runCountyOnly'),
       runWriteback: document.getElementById('runWriteback'),
       resetAll: document.getElementById('resetAll'),
       metricSoldRows: document.getElementById('metricSoldRows'),
@@ -526,9 +536,11 @@ Source"></textarea>
       const file = e.target.files[0];
       if (!file) return;
       state.sold = await loadCsvFile(file);
+      state.soldFillBundle = null;
       els.soldFileMeta.textContent = `${file.name} • ${state.sold.rows.length.toLocaleString()} rows • ${state.sold.headers.length} columns`;
       populateSelect(els.soldAddressCol, state.sold.headers, guessColumn(state.sold.headers, ['property address', 'address', 'site address', 'street address']));
       populateSelect(els.soldApnCol, state.sold.headers, guessColumn(state.sold.headers, ['apn', 'ain', 'parcel', 'assessor']));
+      populateSelectOptional(els.soldZipCol, state.sold.headers, guessZipColumn(state.sold.headers));
       refreshStateUI();
     });
 
@@ -543,6 +555,7 @@ Source"></textarea>
     });
 
     els.runFillApn.addEventListener('click', () => { void runFillApn(); });
+    els.runCountyOnly.addEventListener('click', () => { void runCountyOnly(); });
     els.runWriteback.addEventListener('click', runWriteback);
     els.resetAll.addEventListener('click', resetAll);
     els.downloadPrimary.addEventListener('click', () => downloadCsvFromState('primary'));
@@ -555,6 +568,7 @@ Source"></textarea>
       const ready = Boolean(state.sold && state.master);
       els.runFillApn.disabled = !ready;
       els.runWriteback.disabled = !ready;
+      els.runCountyOnly.disabled = !state.sold;
     }
 
     async function loadCsvFile(file) {
@@ -663,6 +677,21 @@ Source"></textarea>
       });
     }
 
+    function populateSelectOptional(select, headers, selected) {
+      select.innerHTML = '';
+      const none = document.createElement('option');
+      none.value = '';
+      none.textContent = 'None — do not filter by ZIP';
+      select.appendChild(none);
+      headers.forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h;
+        opt.textContent = h;
+        if (h === selected) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
     function guessColumn(headers, candidates) {
       const normalized = headers.map(h => ({ raw: h, n: normalizeHeader(h) }));
       for (const candidate of candidates) {
@@ -670,6 +699,17 @@ Source"></textarea>
         if (found) return found.raw;
       }
       return headers[0] || '';
+    }
+
+    function guessZipColumn(headers) {
+      const normalized = headers.map(h => ({ raw: h, n: normalizeHeader(h) }));
+      const hints = ['zip code', 'postal code', 'postcode', 'zip'];
+      for (const hint of hints) {
+        const hn = normalizeHeader(hint);
+        const found = normalized.find(h => h.n.includes(hn));
+        if (found) return found.raw;
+      }
+      return '';
     }
 
     function normalizeHeader(s) {
@@ -727,15 +767,28 @@ Source"></textarea>
       return { house: m[1], street: m[2].trim() };
     }
 
-    function buildLaCountyWhereClause(normalizedAddress) {
+    function normalizeZipPrefix5(value) {
+      const d = String(value || '').replace(/\D/g, '');
+      if (d.length >= 5) return d.slice(0, 5);
+      return '';
+    }
+
+    function buildLaCountyWhereClause(normalizedAddress, zipPrefix5) {
       const { house, street } = parseHouseAndStreet(normalizedAddress);
+      let core;
       if (house && street) {
         const h = escapeSqlLiteral(house);
         const s = escapeSqlLiteral(street);
-        return `SitusHouseNo = '${h}' AND UPPER(SitusStreet) LIKE UPPER('${s}%')`;
+        core = `SitusHouseNo = '${h}' AND UPPER(SitusStreet) LIKE UPPER('${s}%')`;
+      } else {
+        const full = escapeSqlLiteral(normalizedAddress);
+        core = `UPPER(SitusAddress) LIKE UPPER('%${full}%')`;
       }
-      const full = escapeSqlLiteral(normalizedAddress);
-      return `UPPER(SitusAddress) LIKE UPPER('%${full}%')`;
+      if (zipPrefix5) {
+        const z = escapeSqlLiteral(zipPrefix5);
+        return `(${core}) AND SitusZIP LIKE '${z}%'`;
+      }
+      return core;
     }
 
     function pickApnDigitsFromAttributes(attrs) {
@@ -745,8 +798,8 @@ Source"></textarea>
       return normalizeApn(attrs.APN) || '';
     }
 
-    async function queryLaCountyParcelFeatures(normalizedAddress) {
-      const where = buildLaCountyWhereClause(normalizedAddress);
+    async function queryLaCountyParcelFeatures(normalizedAddress, zipPrefix5) {
+      const where = buildLaCountyWhereClause(normalizedAddress, zipPrefix5 || '');
       const params = new URLSearchParams({
         f: 'json',
         where,
@@ -785,6 +838,7 @@ Source"></textarea>
       audit,
       soldApnCol,
       soldAddressCol,
+      soldZipCol,
       updatedCount,
       setProgressText
     }) {
@@ -801,7 +855,9 @@ Source"></textarea>
         if (setProgressText) setProgressText(`LA County parcel lookup… ${done} / ${targets.length}`);
 
         try {
-          const raw = await queryLaCountyParcelFeatures(address);
+          const zipPrefix =
+            soldZipCol && String(soldZipCol).trim() ? normalizeZipPrefix5(row[soldZipCol]) : '';
+          const raw = await queryLaCountyParcelFeatures(address, zipPrefix);
           const { apns, exceededTransferLimit, featureCount } = uniqueApnDigitsFromParcelResult(raw);
 
           if (apns.length === 1) {
@@ -812,6 +868,7 @@ Source"></textarea>
             updated += 1;
             reviewRows = reviewRows.filter(r => r.sold_row !== row.__rownum);
             const limitNote = exceededTransferLimit ? '; query hit record limit (single APN among returned rows)' : '';
+            const zipNote = zipPrefix ? `; ZIP filter ${zipPrefix}` : '';
             audit.push({
               mode: 'fill_apn',
               sold_row: row.__rownum,
@@ -820,7 +877,7 @@ Source"></textarea>
               normalized_address: address,
               existing_apn: '',
               applied_apn: apns[0],
-              note: `LA County parcels (${featureCount} feature(s)); prior status: ${prev || 'none'}${limitNote}`
+              note: `LA County parcels (${featureCount} feature(s)); prior status: ${prev || 'none'}${limitNote}${zipNote}`
             });
           } else if (apns.length > 1) {
             reviewRows = reviewRows.filter(r => r.sold_row !== row.__rownum);
@@ -929,6 +986,7 @@ Source"></textarea>
       const masterApnCol = els.masterApnCol.value;
 
       els.runFillApn.disabled = true;
+      els.runCountyOnly.disabled = true;
       els.runWriteback.disabled = true;
       els.runMessage.className = 'callout warn';
       els.runMessage.textContent = 'Running master address match…';
@@ -1025,6 +1083,7 @@ Source"></textarea>
             audit,
             soldApnCol,
             soldAddressCol,
+            soldZipCol: els.soldZipCol.value,
             updatedCount: updated,
             setProgressText: t => {
               els.runMessage.textContent = t;
@@ -1045,6 +1104,11 @@ Source"></textarea>
           reviewFilename: 'sold-properties-apn-review-queue.csv',
           auditFilename: 'sold-properties-apn-audit-log.csv'
         };
+        state.soldFillBundle = {
+          primaryRows: output,
+          reviewRows,
+          auditRows: audit
+        };
 
         const countyNote = els.lacountyLookup.checked ? ' LA County parcel pass finished.' : '';
         updateRunUi({
@@ -1058,6 +1122,98 @@ Source"></textarea>
         els.runMessage.textContent = `Run failed: ${msg}`;
       } finally {
         els.runFillApn.disabled = false;
+        refreshStateUI();
+      }
+    }
+
+    function getSoldWorkingRowsClone() {
+      const bundle = state.soldFillBundle;
+      if (bundle && bundle.primaryRows && bundle.primaryRows.length) {
+        return bundle.primaryRows.map(r => ({ ...r }));
+      }
+      if (state.sold && state.sold.rows) return state.sold.rows.map(r => ({ ...r }));
+      return [];
+    }
+
+    async function runCountyOnly() {
+      const soldAddressCol = els.soldAddressCol.value;
+      const soldApnCol = els.soldApnCol.value;
+      const soldZipCol = els.soldZipCol.value;
+
+      if (!state.sold) {
+        els.runMessage.className = 'callout danger';
+        els.runMessage.textContent = 'Load a sold properties CSV first.';
+        return;
+      }
+
+      const output = getSoldWorkingRowsClone();
+      if (!output.length) {
+        els.runMessage.className = 'callout danger';
+        els.runMessage.textContent = 'No sold rows to process.';
+        return;
+      }
+
+      let reviewRows = [];
+      const bundle = state.soldFillBundle;
+      if (bundle && bundle.reviewRows) {
+        reviewRows = bundle.reviewRows.filter(r => {
+          const row = output.find(o => o.__rownum === r.sold_row);
+          return row && !normalizeApn(row[soldApnCol]);
+        });
+      }
+
+      const audit = bundle && bundle.auditRows ? bundle.auditRows.slice() : [];
+
+      const updatedCount = output.filter(r => normalizeApn(r[soldApnCol])).length;
+
+      els.runFillApn.disabled = true;
+      els.runCountyOnly.disabled = true;
+      els.runWriteback.disabled = true;
+      els.runMessage.className = 'callout warn';
+      els.runMessage.textContent = 'LA County parcel lookup…';
+
+      try {
+        const county = await lacountyFillPass({
+          output,
+          review: reviewRows,
+          audit,
+          soldApnCol,
+          soldAddressCol,
+          soldZipCol,
+          updatedCount,
+          setProgressText: t => {
+            els.runMessage.textContent = t;
+          }
+        });
+
+        const needsReview = county.review.length;
+
+        state.mode = 'fill_apn';
+        state.result = {
+          primaryRows: output,
+          reviewRows: county.review,
+          auditRows: county.audit,
+          primaryFilename: 'sold-properties-with-apn-filled.csv',
+          reviewFilename: 'sold-properties-apn-review-queue.csv',
+          auditFilename: 'sold-properties-apn-audit-log.csv'
+        };
+        state.soldFillBundle = {
+          primaryRows: output,
+          reviewRows: county.review,
+          auditRows: county.audit
+        };
+
+        const newCountyFills = Math.max(0, county.updated - updatedCount);
+        updateRunUi({
+          updated: county.updated,
+          needsReview,
+          message: `LA County-only run complete. ${newCountyFills.toLocaleString()} new row(s) filled via parcels. ${county.updated.toLocaleString()} total rows now have an APN. ${needsReview.toLocaleString()} rows need review.`
+        });
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        els.runMessage.className = 'callout danger';
+        els.runMessage.textContent = `Run failed: ${msg}`;
+      } finally {
         refreshStateUI();
       }
     }
@@ -1231,12 +1387,14 @@ Source"></textarea>
       state.master = null;
       state.result = null;
       state.mode = null;
+      state.soldFillBundle = null;
       els.soldFile.value = '';
       els.masterFile.value = '';
       els.soldFileMeta.textContent = '';
       els.masterFileMeta.textContent = '';
       els.soldAddressCol.innerHTML = '';
       els.soldApnCol.innerHTML = '';
+      els.soldZipCol.innerHTML = '';
       els.masterAddressCol.innerHTML = '';
       els.masterApnCol.innerHTML = '';
       els.writebackFields.value = '';
