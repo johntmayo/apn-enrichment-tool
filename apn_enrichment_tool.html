@@ -319,12 +319,12 @@
       <p>
         A first-pass standalone tool for Altagether’s property matching workflow. This version focuses on two operations:
         fill missing APNs in a sold-properties file using the master data file, then push sold-property facts back into every
-        matching master row by APN. It is deterministic by default and surfaces ambiguous or missing matches for review.
+        matching master row by APN. Master matching is deterministic; you can optionally query the LA County public parcel layer for rows still missing an APN. Ambiguous or missing matches are surfaced for review.
       </p>
       <div class="pill-row">
         <div class="pill">Mode 1: Master → Sold</div>
         <div class="pill">Mode 2: Sold → Master</div>
-        <div class="pill">Deterministic only</div>
+        <div class="pill">Deterministic + optional LA County</div>
         <div class="pill">Audit-friendly</div>
       </div>
     </section>
@@ -387,14 +387,21 @@ Source"></textarea>
           </div>
 
           <div class="stack">
+            <h3>LA County parcel lookup</h3>
+            <label class="small" style="display:flex;gap:10px;align-items:flex-start;cursor:pointer;">
+              <input type="checkbox" id="lacountyLookup" style="width:auto;margin-top:3px;" />
+              <span>After the master pass, query the public <span class="mono">LA_County_Parcels</span> layer for rows that still have no APN. Only a single parcel match is applied automatically; zero or multiple matches stay in the review queue. Requires network access from this page (browser CORS).</span>
+            </label>
+          </div>
+
+          <div class="stack">
             <button id="runFillApn" disabled>Run APN fill into sold file</button>
             <button id="runWriteback" class="secondary" disabled>Run sold-data write-back into master</button>
             <button id="resetAll" class="ghost">Reset</button>
           </div>
 
           <div class="callout warn">
-            This version does not do fuzzy guessing or live county lookup. It only auto-applies deterministic address matches.
-            Ambiguous and unmatched records are held out for review.
+            Master matching is deterministic (normalized address only). Optional LA County lookup uses the Assessor parcel snapshot on ArcGIS; it is throttled and only auto-fills when exactly one parcel matches the query.
           </div>
         </div>
       </aside>
@@ -458,7 +465,7 @@ Source"></textarea>
           <div class="panel-inner stack">
             <h2>Notes for next version</h2>
             <ul class="list">
-              <li>Add live or batch APN lookup from official LA County sources when a stable workflow is confirmed.</li>
+              <li>Optional LA County parcel lookup is available (checkbox); consider ZIP/city filters and saved presets next.</li>
               <li>Add saved column presets per file type.</li>
               <li>Add manual review resolution inside the UI, not just export.</li>
               <li>Add broader APN-based enrichment modules such as permits and inspections.</li>
@@ -487,6 +494,7 @@ Source"></textarea>
       masterAddressCol: document.getElementById('masterAddressCol'),
       masterApnCol: document.getElementById('masterApnCol'),
       writebackFields: document.getElementById('writebackFields'),
+      lacountyLookup: document.getElementById('lacountyLookup'),
       runFillApn: document.getElementById('runFillApn'),
       runWriteback: document.getElementById('runWriteback'),
       resetAll: document.getElementById('resetAll'),
@@ -534,7 +542,7 @@ Source"></textarea>
       refreshStateUI();
     });
 
-    els.runFillApn.addEventListener('click', runFillApn);
+    els.runFillApn.addEventListener('click', () => { void runFillApn(); });
     els.runWriteback.addEventListener('click', runWriteback);
     els.resetAll.addEventListener('click', resetAll);
     els.downloadPrimary.addEventListener('click', () => downloadCsvFromState('primary'));
@@ -706,6 +714,202 @@ Source"></textarea>
       return String(value || '').replace(/[^0-9]/g, '').trim();
     }
 
+    const LA_COUNTY_PARCEL_QUERY =
+      'https://services3.arcgis.com/GVgbJbqm8hXASVYi/arcgis/rest/services/LA_County_Parcels/FeatureServer/0/query';
+
+    function escapeSqlLiteral(value) {
+      return String(value ?? '').replace(/'/g, "''");
+    }
+
+    function parseHouseAndStreet(normalizedAddress) {
+      const m = String(normalizedAddress || '').match(/^(\d+[A-Z]?)\s+(.+)$/);
+      if (!m) return { house: '', street: '' };
+      return { house: m[1], street: m[2].trim() };
+    }
+
+    function buildLaCountyWhereClause(normalizedAddress) {
+      const { house, street } = parseHouseAndStreet(normalizedAddress);
+      if (house && street) {
+        const h = escapeSqlLiteral(house);
+        const s = escapeSqlLiteral(street);
+        return `SitusHouseNo = '${h}' AND UPPER(SitusStreet) LIKE UPPER('${s}%')`;
+      }
+      const full = escapeSqlLiteral(normalizedAddress);
+      return `UPPER(SitusAddress) LIKE UPPER('%${full}%')`;
+    }
+
+    function pickApnDigitsFromAttributes(attrs) {
+      if (!attrs) return '';
+      const ain = normalizeApn(attrs.AIN);
+      if (ain) return ain;
+      return normalizeApn(attrs.APN) || '';
+    }
+
+    async function queryLaCountyParcelFeatures(normalizedAddress) {
+      const where = buildLaCountyWhereClause(normalizedAddress);
+      const params = new URLSearchParams({
+        f: 'json',
+        where,
+        outFields: 'APN,AIN,SitusAddress,SitusStreet,SitusHouseNo,SitusCity,SitusZIP',
+        returnGeometry: 'false',
+        resultRecordCount: '15'
+      });
+      const res = await fetch(`${LA_COUNTY_PARCEL_QUERY}?${params.toString()}`);
+      if (!res.ok) throw new Error(`LA County parcel request failed (${res.status})`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error.message || 'LA County parcel query error');
+      return {
+        features: data.features || [],
+        exceededTransferLimit: Boolean(data.exceededTransferLimit)
+      };
+    }
+
+    function uniqueApnDigitsFromParcelResult({ features, exceededTransferLimit }) {
+      const set = new Set();
+      for (const f of features) {
+        const d = pickApnDigitsFromAttributes(f.attributes);
+        if (d) set.add(d);
+      }
+      return {
+        apns: Array.from(set),
+        exceededTransferLimit,
+        featureCount: features.length
+      };
+    }
+
+    const LACOUNTY_THROTTLE_MS = 260;
+
+    async function lacountyFillPass({
+      output,
+      review,
+      audit,
+      soldApnCol,
+      soldAddressCol,
+      updatedCount,
+      setProgressText
+    }) {
+      let updated = updatedCount;
+      let reviewRows = review;
+      const targets = output.filter(row => !normalizeApn(row[soldApnCol]) && normalizeAddress(row[soldAddressCol]));
+      let done = 0;
+      for (const row of output) {
+        if (normalizeApn(row[soldApnCol])) continue;
+        const address = normalizeAddress(row[soldAddressCol]);
+        if (!address) continue;
+
+        done += 1;
+        if (setProgressText) setProgressText(`LA County parcel lookup… ${done} / ${targets.length}`);
+
+        try {
+          const raw = await queryLaCountyParcelFeatures(address);
+          const { apns, exceededTransferLimit, featureCount } = uniqueApnDigitsFromParcelResult(raw);
+
+          if (apns.length === 1) {
+            row[soldApnCol] = apns[0];
+            const prev = row.__apn_fill_status || '';
+            row.__apn_fill_status =
+              prev === 'ambiguous' ? 'filled_from_lacounty_after_ambiguous_master' : 'filled_from_lacounty';
+            updated += 1;
+            reviewRows = reviewRows.filter(r => r.sold_row !== row.__rownum);
+            const limitNote = exceededTransferLimit ? '; query hit record limit (single APN among returned rows)' : '';
+            audit.push({
+              mode: 'fill_apn',
+              sold_row: row.__rownum,
+              action: 'filled_apn_lacounty',
+              address: row[soldAddressCol],
+              normalized_address: address,
+              existing_apn: '',
+              applied_apn: apns[0],
+              note: `LA County parcels (${featureCount} feature(s)); prior status: ${prev || 'none'}${limitNote}`
+            });
+          } else if (apns.length > 1) {
+            reviewRows = reviewRows.filter(r => r.sold_row !== row.__rownum);
+            reviewRows.push({
+              issue_type: 'ambiguous_lacounty_match',
+              sold_row: row.__rownum,
+              address: row[soldAddressCol],
+              normalized_address: address,
+              candidate_apns: apns.join(' | '),
+              note: exceededTransferLimit
+                ? 'Multiple distinct APNs in returned rows (or limit truncated results)'
+                : 'Multiple parcels matched the situs query'
+            });
+            row.__apn_fill_status = 'lacounty_ambiguous';
+            audit.push({
+              mode: 'fill_apn',
+              sold_row: row.__rownum,
+              action: 'held_for_review_lacounty_ambiguous',
+              address: row[soldAddressCol],
+              normalized_address: address,
+              existing_apn: '',
+              applied_apn: '',
+              note: apns.join(' | ')
+            });
+          } else if (featureCount > 0) {
+            reviewRows = reviewRows.filter(r => r.sold_row !== row.__rownum);
+            reviewRows.push({
+              issue_type: 'lacounty_unparsed_apn',
+              sold_row: row.__rownum,
+              address: row[soldAddressCol],
+              normalized_address: address,
+              candidate_apns: '',
+              note: 'Parcel rows returned but AIN/APN fields were empty or unparsable'
+            });
+            row.__apn_fill_status = 'lacounty_unparsed';
+            audit.push({
+              mode: 'fill_apn',
+              sold_row: row.__rownum,
+              action: 'held_for_review_lacounty_unparsed',
+              address: row[soldAddressCol],
+              normalized_address: address,
+              existing_apn: '',
+              applied_apn: '',
+              note: `${featureCount} feature(s) without usable AIN/APN`
+            });
+          } else {
+            audit.push({
+              mode: 'fill_apn',
+              sold_row: row.__rownum,
+              action: 'lacounty_no_parcel_match',
+              address: row[soldAddressCol],
+              normalized_address: address,
+              existing_apn: '',
+              applied_apn: '',
+              note: exceededTransferLimit
+                ? 'No rows returned; query may need a tighter address'
+                : 'No parcel features returned for situs query'
+            });
+          }
+        } catch (err) {
+          const msg = err && err.message ? err.message : String(err);
+          reviewRows = reviewRows.filter(r => r.sold_row !== row.__rownum);
+          reviewRows.push({
+            issue_type: 'lacounty_lookup_error',
+            sold_row: row.__rownum,
+            address: row[soldAddressCol],
+            normalized_address: address,
+            candidate_apns: '',
+            note: msg
+          });
+          row.__apn_fill_status = 'lacounty_error';
+          audit.push({
+            mode: 'fill_apn',
+            sold_row: row.__rownum,
+            action: 'lacounty_lookup_error',
+            address: row[soldAddressCol],
+            normalized_address: address,
+            existing_apn: '',
+            applied_apn: '',
+            note: msg
+          });
+        }
+
+        await new Promise(r => setTimeout(r, LACOUNTY_THROTTLE_MS));
+      }
+
+      return { updated, review: reviewRows };
+    }
+
     function buildMasterAddressIndex(masterRows, addressCol, apnCol) {
       const index = new Map();
       masterRows.forEach(row => {
@@ -718,113 +922,144 @@ Source"></textarea>
       return index;
     }
 
-    function runFillApn() {
+    async function runFillApn() {
       const soldAddressCol = els.soldAddressCol.value;
       const soldApnCol = els.soldApnCol.value;
       const masterAddressCol = els.masterAddressCol.value;
       const masterApnCol = els.masterApnCol.value;
 
-      const addressIndex = buildMasterAddressIndex(state.master.rows, masterAddressCol, masterApnCol);
-      const output = state.sold.rows.map(r => ({ ...r }));
-      const review = [];
-      const audit = [];
-      let updated = 0;
-      let needsReview = 0;
+      els.runFillApn.disabled = true;
+      els.runWriteback.disabled = true;
+      els.runMessage.className = 'callout warn';
+      els.runMessage.textContent = 'Running master address match…';
 
-      output.forEach(row => {
-        const currentApn = normalizeApn(row[soldApnCol]);
-        const address = normalizeAddress(row[soldAddressCol]);
+      try {
+        const addressIndex = buildMasterAddressIndex(state.master.rows, masterAddressCol, masterApnCol);
+        const output = state.sold.rows.map(r => ({ ...r }));
+        const review = [];
+        const audit = [];
+        let updated = 0;
 
-        if (currentApn) {
-          audit.push({
-            mode: 'fill_apn',
-            sold_row: row.__rownum,
-            action: 'kept_existing_apn',
-            address: row[soldAddressCol],
-            normalized_address: address,
-            existing_apn: currentApn,
-            applied_apn: currentApn,
-            note: 'Sold row already had APN'
+        output.forEach(row => {
+          const currentApn = normalizeApn(row[soldApnCol]);
+          const address = normalizeAddress(row[soldAddressCol]);
+
+          if (currentApn) {
+            audit.push({
+              mode: 'fill_apn',
+              sold_row: row.__rownum,
+              action: 'kept_existing_apn',
+              address: row[soldAddressCol],
+              normalized_address: address,
+              existing_apn: currentApn,
+              applied_apn: currentApn,
+              note: 'Sold row already had APN'
+            });
+            return;
+          }
+
+          const candidates = Array.from(addressIndex.get(address) || []);
+
+          if (candidates.length === 1) {
+            row[soldApnCol] = candidates[0];
+            row.__apn_fill_status = 'filled_from_master';
+            updated += 1;
+            audit.push({
+              mode: 'fill_apn',
+              sold_row: row.__rownum,
+              action: 'filled_apn',
+              address: row[soldAddressCol],
+              normalized_address: address,
+              existing_apn: '',
+              applied_apn: candidates[0],
+              note: 'Deterministic address match from master'
+            });
+          } else if (candidates.length > 1) {
+            row.__apn_fill_status = 'ambiguous';
+            review.push({
+              issue_type: 'ambiguous_apn_match',
+              sold_row: row.__rownum,
+              address: row[soldAddressCol],
+              normalized_address: address,
+              candidate_apns: candidates.join(' | '),
+              note: 'Multiple APNs found in master for normalized address'
+            });
+            audit.push({
+              mode: 'fill_apn',
+              sold_row: row.__rownum,
+              action: 'held_for_review_ambiguous',
+              address: row[soldAddressCol],
+              normalized_address: address,
+              existing_apn: '',
+              applied_apn: '',
+              note: candidates.join(' | ')
+            });
+          } else {
+            row.__apn_fill_status = 'no_match';
+            review.push({
+              issue_type: 'no_master_match',
+              sold_row: row.__rownum,
+              address: row[soldAddressCol],
+              normalized_address: address,
+              candidate_apns: '',
+              note: 'No APN match found in master by normalized address'
+            });
+            audit.push({
+              mode: 'fill_apn',
+              sold_row: row.__rownum,
+              action: 'held_for_review_no_match',
+              address: row[soldAddressCol],
+              normalized_address: address,
+              existing_apn: '',
+              applied_apn: '',
+              note: 'No deterministic match found'
+            });
+          }
+        });
+
+        let reviewRows = review;
+        if (els.lacountyLookup.checked) {
+          const county = await lacountyFillPass({
+            output,
+            review: reviewRows,
+            audit,
+            soldApnCol,
+            soldAddressCol,
+            updatedCount: updated,
+            setProgressText: t => {
+              els.runMessage.textContent = t;
+            }
           });
-          return;
+          updated = county.updated;
+          reviewRows = county.review;
         }
 
-        const candidates = Array.from(addressIndex.get(address) || []);
+        const needsReview = reviewRows.length;
 
-        if (candidates.length === 1) {
-          row[soldApnCol] = candidates[0];
-          row.__apn_fill_status = 'filled_from_master';
-          updated += 1;
-          audit.push({
-            mode: 'fill_apn',
-            sold_row: row.__rownum,
-            action: 'filled_apn',
-            address: row[soldAddressCol],
-            normalized_address: address,
-            existing_apn: '',
-            applied_apn: candidates[0],
-            note: 'Deterministic address match from master'
-          });
-        } else if (candidates.length > 1) {
-          row.__apn_fill_status = 'ambiguous';
-          needsReview += 1;
-          review.push({
-            issue_type: 'ambiguous_apn_match',
-            sold_row: row.__rownum,
-            address: row[soldAddressCol],
-            normalized_address: address,
-            candidate_apns: candidates.join(' | '),
-            note: 'Multiple APNs found in master for normalized address'
-          });
-          audit.push({
-            mode: 'fill_apn',
-            sold_row: row.__rownum,
-            action: 'held_for_review_ambiguous',
-            address: row[soldAddressCol],
-            normalized_address: address,
-            existing_apn: '',
-            applied_apn: '',
-            note: candidates.join(' | ')
-          });
-        } else {
-          row.__apn_fill_status = 'no_match';
-          needsReview += 1;
-          review.push({
-            issue_type: 'no_master_match',
-            sold_row: row.__rownum,
-            address: row[soldAddressCol],
-            normalized_address: address,
-            candidate_apns: '',
-            note: 'No APN match found in master by normalized address'
-          });
-          audit.push({
-            mode: 'fill_apn',
-            sold_row: row.__rownum,
-            action: 'held_for_review_no_match',
-            address: row[soldAddressCol],
-            normalized_address: address,
-            existing_apn: '',
-            applied_apn: '',
-            note: 'No deterministic match found'
-          });
-        }
-      });
+        state.mode = 'fill_apn';
+        state.result = {
+          primaryRows: output,
+          reviewRows,
+          auditRows: audit,
+          primaryFilename: 'sold-properties-with-apn-filled.csv',
+          reviewFilename: 'sold-properties-apn-review-queue.csv',
+          auditFilename: 'sold-properties-apn-audit-log.csv'
+        };
 
-      state.mode = 'fill_apn';
-      state.result = {
-        primaryRows: output,
-        reviewRows: review,
-        auditRows: audit,
-        primaryFilename: 'sold-properties-with-apn-filled.csv',
-        reviewFilename: 'sold-properties-apn-review-queue.csv',
-        auditFilename: 'sold-properties-apn-audit-log.csv'
-      };
-
-      updateRunUi({
-        updated,
-        needsReview,
-        message: `APN fill complete. ${updated.toLocaleString()} rows filled safely. ${needsReview.toLocaleString()} rows need review.`
-      });
+        const countyNote = els.lacountyLookup.checked ? ' LA County parcel pass finished.' : '';
+        updateRunUi({
+          updated,
+          needsReview,
+          message: `APN fill complete. ${updated.toLocaleString()} rows filled safely. ${needsReview.toLocaleString()} rows need review.${countyNote}`
+        });
+      } catch (err) {
+        const msg = err && err.message ? err.message : String(err);
+        els.runMessage.className = 'callout danger';
+        els.runMessage.textContent = `Run failed: ${msg}`;
+      } finally {
+        els.runFillApn.disabled = false;
+        refreshStateUI();
+      }
     }
 
     function runWriteback() {
@@ -1005,6 +1240,7 @@ Source"></textarea>
       els.masterAddressCol.innerHTML = '';
       els.masterApnCol.innerHTML = '';
       els.writebackFields.value = '';
+      els.lacountyLookup.checked = false;
       els.metricSoldRows.textContent = '0';
       els.metricMasterRows.textContent = '0';
       els.metricUpdated.textContent = '0';
