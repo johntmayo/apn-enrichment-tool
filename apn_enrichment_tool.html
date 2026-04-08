@@ -1,0 +1,1028 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>APN Enrichment Tool</title>
+  <style>
+    :root {
+      --bg: #f6f4ef;
+      --surface: #fffdf8;
+      --ink: #1f1f1c;
+      --muted: #66635c;
+      --line: #ddd6c8;
+      --accent: #2e5d4f;
+      --accent-2: #d9efe7;
+      --warn: #9a6700;
+      --warn-bg: #fff7d6;
+      --danger: #9d2d2d;
+      --danger-bg: #fdeaea;
+      --ok: #235f3a;
+      --ok-bg: #eaf7ee;
+      --shadow: 0 10px 30px rgba(0,0,0,.06);
+      --radius: 16px;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+      line-height: 1.4;
+    }
+
+    .wrap {
+      max-width: 1380px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+
+    h1, h2, h3 { margin: 0; }
+
+    .hero {
+      background: linear-gradient(180deg, #fffdf8, #faf6ed);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 28px;
+      box-shadow: var(--shadow);
+      margin-bottom: 20px;
+    }
+
+    .hero p {
+      margin: 12px 0 0;
+      color: var(--muted);
+      max-width: 900px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 340px 1fr;
+      gap: 20px;
+      align-items: start;
+    }
+
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+
+    .panel-inner {
+      padding: 18px;
+    }
+
+    .stack { display: grid; gap: 14px; }
+    .stack-lg { display: grid; gap: 20px; }
+
+    .label {
+      display: block;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 8px;
+    }
+
+    input[type="file"], select, button, textarea {
+      width: 100%;
+      font: inherit;
+    }
+
+    input[type="file"], select, textarea {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 12px;
+      background: white;
+      color: var(--ink);
+    }
+
+    textarea {
+      min-height: 88px;
+      resize: vertical;
+    }
+
+    button {
+      border: 1px solid var(--accent);
+      background: var(--accent);
+      color: white;
+      border-radius: 12px;
+      padding: 12px 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: .15s ease;
+    }
+
+    button:hover { filter: brightness(.95); }
+    button.secondary {
+      background: white;
+      color: var(--accent);
+    }
+    button.ghost {
+      background: transparent;
+      color: var(--accent);
+    }
+    button:disabled {
+      opacity: .45;
+      cursor: not-allowed;
+    }
+
+    .small {
+      font-size: 12px;
+      color: var(--muted);
+    }
+
+    .pill-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .pill {
+      font-size: 12px;
+      padding: 7px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+      background: white;
+    }
+
+    .metric .k {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .metric .v {
+      font-size: 28px;
+      font-weight: 800;
+      letter-spacing: -.02em;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
+
+    .tab-btn {
+      width: auto;
+      padding: 10px 14px;
+      border-radius: 999px;
+      background: white;
+      color: var(--ink);
+      border: 1px solid var(--line);
+    }
+
+    .tab-btn.active {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+
+    .tab {
+      display: none;
+    }
+
+    .tab.active {
+      display: block;
+    }
+
+    .callout {
+      border-radius: 14px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .callout.warn {
+      border-color: #f0d89d;
+      background: var(--warn-bg);
+      color: #5b4300;
+    }
+
+    .callout.danger {
+      border-color: #efc0c0;
+      background: var(--danger-bg);
+      color: #6f2020;
+    }
+
+    .callout.ok {
+      border-color: #c9e5d1;
+      background: var(--ok-bg);
+      color: #184628;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+    }
+
+    th, td {
+      font-size: 13px;
+      text-align: left;
+      padding: 10px 12px;
+      border-bottom: 1px solid #eee6d8;
+      vertical-align: top;
+    }
+
+    th {
+      background: #faf6ed;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: var(--muted);
+    }
+
+    tr:last-child td { border-bottom: 0; }
+
+    .scroll {
+      overflow: auto;
+      border-radius: 14px;
+      border: 1px solid var(--line);
+      background: white;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .toolbar-left, .toolbar-right {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 12px;
+    }
+
+    .list {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+    }
+
+    .hidden { display: none !important; }
+
+    .inline-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .footer-note {
+      margin-top: 12px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    @media (max-width: 1100px) {
+      .grid { grid-template-columns: 1fr; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 700px) {
+      .metrics, .inline-grid { grid-template-columns: 1fr; }
+      .wrap { padding: 14px; }
+      .hero { padding: 20px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>APN Enrichment Tool</h1>
+      <p>
+        A first-pass standalone tool for Altagether’s property matching workflow. This version focuses on two operations:
+        fill missing APNs in a sold-properties file using the master data file, then push sold-property facts back into every
+        matching master row by APN. It is deterministic by default and surfaces ambiguous or missing matches for review.
+      </p>
+      <div class="pill-row">
+        <div class="pill">Mode 1: Master → Sold</div>
+        <div class="pill">Mode 2: Sold → Master</div>
+        <div class="pill">Deterministic only</div>
+        <div class="pill">Audit-friendly</div>
+      </div>
+    </section>
+
+    <div class="grid">
+      <aside class="panel">
+        <div class="panel-inner stack-lg">
+          <div>
+            <h2>Inputs</h2>
+            <p class="small">Upload CSV files. The tool will infer likely columns, but you can override them before running a merge.</p>
+          </div>
+
+          <div class="stack">
+            <div>
+              <label class="label" for="soldFile">Sold properties CSV</label>
+              <input id="soldFile" type="file" accept=".csv" />
+              <div id="soldFileMeta" class="small"></div>
+            </div>
+
+            <div>
+              <label class="label" for="masterFile">Master data CSV</label>
+              <input id="masterFile" type="file" accept=".csv" />
+              <div id="masterFileMeta" class="small"></div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <h3>Column mapping</h3>
+            <div class="inline-grid">
+              <div>
+                <label class="label" for="soldAddressCol">Sold address column</label>
+                <select id="soldAddressCol"></select>
+              </div>
+              <div>
+                <label class="label" for="soldApnCol">Sold APN column</label>
+                <select id="soldApnCol"></select>
+              </div>
+              <div>
+                <label class="label" for="masterAddressCol">Master address column</label>
+                <select id="masterAddressCol"></select>
+              </div>
+              <div>
+                <label class="label" for="masterApnCol">Master APN column</label>
+                <select id="masterApnCol"></select>
+              </div>
+            </div>
+          </div>
+
+          <div class="stack">
+            <h3>Write-back settings</h3>
+            <label class="label" for="writebackFields">Sold fields to copy into master</label>
+            <textarea id="writebackFields" placeholder="One field name per line. Example:
+Status
+Sold Date
+Buyer
+Seller
+Sale Price
+Source"></textarea>
+            <p class="small">If a named field does not exist in master, the tool will create it in the exported output.</p>
+          </div>
+
+          <div class="stack">
+            <button id="runFillApn" disabled>Run APN fill into sold file</button>
+            <button id="runWriteback" class="secondary" disabled>Run sold-data write-back into master</button>
+            <button id="resetAll" class="ghost">Reset</button>
+          </div>
+
+          <div class="callout warn">
+            This version does not do fuzzy guessing or live county lookup. It only auto-applies deterministic address matches.
+            Ambiguous and unmatched records are held out for review.
+          </div>
+        </div>
+      </aside>
+
+      <main class="stack-lg">
+        <section class="panel">
+          <div class="panel-inner stack">
+            <div class="toolbar">
+              <div class="toolbar-left"><h2>Run summary</h2></div>
+              <div class="toolbar-right small" id="lastRunLabel">No run yet</div>
+            </div>
+            <div class="metrics">
+              <div class="metric"><div class="k">Sold rows</div><div class="v" id="metricSoldRows">0</div></div>
+              <div class="metric"><div class="k">Master rows</div><div class="v" id="metricMasterRows">0</div></div>
+              <div class="metric"><div class="k">Filled / updated</div><div class="v" id="metricUpdated">0</div></div>
+              <div class="metric"><div class="k">Needs review</div><div class="v" id="metricReview">0</div></div>
+            </div>
+            <div id="runMessage" class="callout">Upload files to begin.</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-inner">
+            <div class="tabs">
+              <button class="tab-btn active" data-tab="preview">Preview</button>
+              <button class="tab-btn" data-tab="review">Review queue</button>
+              <button class="tab-btn" data-tab="audit">Audit log</button>
+              <button class="tab-btn" data-tab="downloads">Downloads</button>
+            </div>
+
+            <div id="tab-preview" class="tab active stack">
+              <div class="small">A small sample of the current transformed output.</div>
+              <div class="scroll"><table id="previewTable"></table></div>
+            </div>
+
+            <div id="tab-review" class="tab stack">
+              <div class="small">Rows that could not be safely auto-applied.</div>
+              <div class="scroll"><table id="reviewTable"></table></div>
+            </div>
+
+            <div id="tab-audit" class="tab stack">
+              <div class="small">Detailed row-by-row log of what the tool did.</div>
+              <div class="scroll"><table id="auditTable"></table></div>
+            </div>
+
+            <div id="tab-downloads" class="tab stack">
+              <div class="callout ok">
+                Export files after a run. Outputs are generated entirely in-browser.
+              </div>
+              <div class="stack">
+                <button id="downloadPrimary" disabled>Download primary output CSV</button>
+                <button id="downloadReview" class="secondary" disabled>Download review queue CSV</button>
+                <button id="downloadAudit" class="secondary" disabled>Download audit log CSV</button>
+              </div>
+              <div class="footer-note" id="downloadHint">No generated files yet.</div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-inner stack">
+            <h2>Notes for next version</h2>
+            <ul class="list">
+              <li>Add live or batch APN lookup from official LA County sources when a stable workflow is confirmed.</li>
+              <li>Add saved column presets per file type.</li>
+              <li>Add manual review resolution inside the UI, not just export.</li>
+              <li>Add broader APN-based enrichment modules such as permits and inspections.</li>
+            </ul>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script>
+    const state = {
+      sold: null,
+      master: null,
+      result: null,
+      mode: null
+    };
+
+    const els = {
+      soldFile: document.getElementById('soldFile'),
+      masterFile: document.getElementById('masterFile'),
+      soldFileMeta: document.getElementById('soldFileMeta'),
+      masterFileMeta: document.getElementById('masterFileMeta'),
+      soldAddressCol: document.getElementById('soldAddressCol'),
+      soldApnCol: document.getElementById('soldApnCol'),
+      masterAddressCol: document.getElementById('masterAddressCol'),
+      masterApnCol: document.getElementById('masterApnCol'),
+      writebackFields: document.getElementById('writebackFields'),
+      runFillApn: document.getElementById('runFillApn'),
+      runWriteback: document.getElementById('runWriteback'),
+      resetAll: document.getElementById('resetAll'),
+      metricSoldRows: document.getElementById('metricSoldRows'),
+      metricMasterRows: document.getElementById('metricMasterRows'),
+      metricUpdated: document.getElementById('metricUpdated'),
+      metricReview: document.getElementById('metricReview'),
+      runMessage: document.getElementById('runMessage'),
+      lastRunLabel: document.getElementById('lastRunLabel'),
+      previewTable: document.getElementById('previewTable'),
+      reviewTable: document.getElementById('reviewTable'),
+      auditTable: document.getElementById('auditTable'),
+      downloadPrimary: document.getElementById('downloadPrimary'),
+      downloadReview: document.getElementById('downloadReview'),
+      downloadAudit: document.getElementById('downloadAudit'),
+      downloadHint: document.getElementById('downloadHint')
+    };
+
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        btn.classList.add('active');
+        document.getElementById(`tab-${btn.dataset.tab}`).classList.add('active');
+      });
+    });
+
+    els.soldFile.addEventListener('change', async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      state.sold = await loadCsvFile(file);
+      els.soldFileMeta.textContent = `${file.name} • ${state.sold.rows.length.toLocaleString()} rows • ${state.sold.headers.length} columns`;
+      populateSelect(els.soldAddressCol, state.sold.headers, guessColumn(state.sold.headers, ['property address', 'address', 'site address', 'street address']));
+      populateSelect(els.soldApnCol, state.sold.headers, guessColumn(state.sold.headers, ['apn', 'ain', 'parcel', 'assessor']));
+      refreshStateUI();
+    });
+
+    els.masterFile.addEventListener('change', async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      state.master = await loadCsvFile(file);
+      els.masterFileMeta.textContent = `${file.name} • ${state.master.rows.length.toLocaleString()} rows • ${state.master.headers.length} columns`;
+      populateSelect(els.masterAddressCol, state.master.headers, guessColumn(state.master.headers, ['address', 'property address', 'full address', 'site address', 'voter address']));
+      populateSelect(els.masterApnCol, state.master.headers, guessColumn(state.master.headers, ['apn', 'ain', 'parcel', 'assessor']));
+      refreshStateUI();
+    });
+
+    els.runFillApn.addEventListener('click', runFillApn);
+    els.runWriteback.addEventListener('click', runWriteback);
+    els.resetAll.addEventListener('click', resetAll);
+    els.downloadPrimary.addEventListener('click', () => downloadCsvFromState('primary'));
+    els.downloadReview.addEventListener('click', () => downloadCsvFromState('review'));
+    els.downloadAudit.addEventListener('click', () => downloadCsvFromState('audit'));
+
+    function refreshStateUI() {
+      els.metricSoldRows.textContent = state.sold ? state.sold.rows.length.toLocaleString() : '0';
+      els.metricMasterRows.textContent = state.master ? state.master.rows.length.toLocaleString() : '0';
+      const ready = Boolean(state.sold && state.master);
+      els.runFillApn.disabled = !ready;
+      els.runWriteback.disabled = !ready;
+    }
+
+    async function loadCsvFile(file) {
+      const text = await file.text();
+      const rows = parseCsv(text);
+      if (!rows.length) return { headers: [], rows: [] };
+      const headers = rows[0].map(h => String(h || '').trim());
+      const body = rows.slice(1).map((row, i) => {
+        const obj = {};
+        headers.forEach((header, idx) => {
+          obj[header] = row[idx] ?? '';
+        });
+        obj.__rownum = i + 2;
+        return obj;
+      });
+      return { headers, rows: body };
+    }
+
+    function parseCsv(text) {
+      const rows = [];
+      let row = [];
+      let cell = '';
+      let i = 0;
+      let inQuotes = false;
+
+      while (i < text.length) {
+        const char = text[i];
+        const next = text[i + 1];
+
+        if (inQuotes) {
+          if (char === '"' && next === '"') {
+            cell += '"';
+            i += 2;
+            continue;
+          }
+          if (char === '"') {
+            inQuotes = false;
+            i += 1;
+            continue;
+          }
+          cell += char;
+          i += 1;
+          continue;
+        }
+
+        if (char === '"') {
+          inQuotes = true;
+          i += 1;
+          continue;
+        }
+
+        if (char === ',') {
+          row.push(cell);
+          cell = '';
+          i += 1;
+          continue;
+        }
+
+        if (char === '\n') {
+          row.push(cell);
+          rows.push(row);
+          row = [];
+          cell = '';
+          i += 1;
+          continue;
+        }
+
+        if (char === '\r') {
+          i += 1;
+          continue;
+        }
+
+        cell += char;
+        i += 1;
+      }
+
+      row.push(cell);
+      rows.push(row);
+      return rows.filter(r => !(r.length === 1 && r[0] === ''));
+    }
+
+    function toCsv(rows) {
+      if (!rows || !rows.length) return '';
+      const headers = Object.keys(rows[0]);
+      const lines = [headers.map(csvEscape).join(',')];
+      rows.forEach(row => {
+        lines.push(headers.map(h => csvEscape(row[h] ?? '')).join(','));
+      });
+      return lines.join('\n');
+    }
+
+    function csvEscape(value) {
+      const s = String(value ?? '');
+      if (/[",\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+      return s;
+    }
+
+    function populateSelect(select, headers, selected) {
+      select.innerHTML = '';
+      headers.forEach(h => {
+        const opt = document.createElement('option');
+        opt.value = h;
+        opt.textContent = h;
+        if (h === selected) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
+    function guessColumn(headers, candidates) {
+      const normalized = headers.map(h => ({ raw: h, n: normalizeHeader(h) }));
+      for (const candidate of candidates) {
+        const found = normalized.find(h => h.n.includes(normalizeHeader(candidate)));
+        if (found) return found.raw;
+      }
+      return headers[0] || '';
+    }
+
+    function normalizeHeader(s) {
+      return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    function normalizeAddress(value) {
+      return String(value || '')
+        .toUpperCase()
+        .replace(/\./g, '')
+        .replace(/,/g, ' ')
+        .replace(/\bNORTH\b/g, 'N')
+        .replace(/\bSOUTH\b/g, 'S')
+        .replace(/\bEAST\b/g, 'E')
+        .replace(/\bWEST\b/g, 'W')
+        .replace(/\bSTREET\b/g, 'ST')
+        .replace(/\bAVENUE\b/g, 'AVE')
+        .replace(/\bBOULEVARD\b/g, 'BLVD')
+        .replace(/\bDRIVE\b/g, 'DR')
+        .replace(/\bROAD\b/g, 'RD')
+        .replace(/\bWY\b/g, 'WAY')
+        .replace(/\bCIRCLE\b/g, 'CIR')
+        .replace(/\bPLACE\b/g, 'PL')
+        .replace(/\bCOURT\b/g, 'CT')
+        .replace(/\bLANE\b/g, 'LN')
+        .replace(/\bTERRACE\b/g, 'TER')
+        .replace(/\bHIGHWAY\b/g, 'HWY')
+        .replace(/\bMOUNT\b/g, 'MT')
+        .replace(/#\s*/g, ' UNIT ')
+        .replace(/\bAPT\b/g, 'UNIT')
+        .replace(/\bAPARTMENT\b/g, 'UNIT')
+        .replace(/\bSTE\b/g, 'UNIT')
+        .replace(/\bSUITE\b/g, 'UNIT')
+        .replace(/\bUNIT\b/g, 'UNIT')
+        .replace(/\b1\/2\b/g, 'HALF')
+        .replace(/[^A-Z0-9 ]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
+    function normalizeApn(value) {
+      return String(value || '').replace(/[^0-9]/g, '').trim();
+    }
+
+    function buildMasterAddressIndex(masterRows, addressCol, apnCol) {
+      const index = new Map();
+      masterRows.forEach(row => {
+        const address = normalizeAddress(row[addressCol]);
+        const apn = normalizeApn(row[apnCol]);
+        if (!address || !apn) return;
+        if (!index.has(address)) index.set(address, new Set());
+        index.get(address).add(apn);
+      });
+      return index;
+    }
+
+    function runFillApn() {
+      const soldAddressCol = els.soldAddressCol.value;
+      const soldApnCol = els.soldApnCol.value;
+      const masterAddressCol = els.masterAddressCol.value;
+      const masterApnCol = els.masterApnCol.value;
+
+      const addressIndex = buildMasterAddressIndex(state.master.rows, masterAddressCol, masterApnCol);
+      const output = state.sold.rows.map(r => ({ ...r }));
+      const review = [];
+      const audit = [];
+      let updated = 0;
+      let needsReview = 0;
+
+      output.forEach(row => {
+        const currentApn = normalizeApn(row[soldApnCol]);
+        const address = normalizeAddress(row[soldAddressCol]);
+
+        if (currentApn) {
+          audit.push({
+            mode: 'fill_apn',
+            sold_row: row.__rownum,
+            action: 'kept_existing_apn',
+            address: row[soldAddressCol],
+            normalized_address: address,
+            existing_apn: currentApn,
+            applied_apn: currentApn,
+            note: 'Sold row already had APN'
+          });
+          return;
+        }
+
+        const candidates = Array.from(addressIndex.get(address) || []);
+
+        if (candidates.length === 1) {
+          row[soldApnCol] = candidates[0];
+          row.__apn_fill_status = 'filled_from_master';
+          updated += 1;
+          audit.push({
+            mode: 'fill_apn',
+            sold_row: row.__rownum,
+            action: 'filled_apn',
+            address: row[soldAddressCol],
+            normalized_address: address,
+            existing_apn: '',
+            applied_apn: candidates[0],
+            note: 'Deterministic address match from master'
+          });
+        } else if (candidates.length > 1) {
+          row.__apn_fill_status = 'ambiguous';
+          needsReview += 1;
+          review.push({
+            issue_type: 'ambiguous_apn_match',
+            sold_row: row.__rownum,
+            address: row[soldAddressCol],
+            normalized_address: address,
+            candidate_apns: candidates.join(' | '),
+            note: 'Multiple APNs found in master for normalized address'
+          });
+          audit.push({
+            mode: 'fill_apn',
+            sold_row: row.__rownum,
+            action: 'held_for_review_ambiguous',
+            address: row[soldAddressCol],
+            normalized_address: address,
+            existing_apn: '',
+            applied_apn: '',
+            note: candidates.join(' | ')
+          });
+        } else {
+          row.__apn_fill_status = 'no_match';
+          needsReview += 1;
+          review.push({
+            issue_type: 'no_master_match',
+            sold_row: row.__rownum,
+            address: row[soldAddressCol],
+            normalized_address: address,
+            candidate_apns: '',
+            note: 'No APN match found in master by normalized address'
+          });
+          audit.push({
+            mode: 'fill_apn',
+            sold_row: row.__rownum,
+            action: 'held_for_review_no_match',
+            address: row[soldAddressCol],
+            normalized_address: address,
+            existing_apn: '',
+            applied_apn: '',
+            note: 'No deterministic match found'
+          });
+        }
+      });
+
+      state.mode = 'fill_apn';
+      state.result = {
+        primaryRows: output,
+        reviewRows: review,
+        auditRows: audit,
+        primaryFilename: 'sold-properties-with-apn-filled.csv',
+        reviewFilename: 'sold-properties-apn-review-queue.csv',
+        auditFilename: 'sold-properties-apn-audit-log.csv'
+      };
+
+      updateRunUi({
+        updated,
+        needsReview,
+        message: `APN fill complete. ${updated.toLocaleString()} rows filled safely. ${needsReview.toLocaleString()} rows need review.`
+      });
+    }
+
+    function runWriteback() {
+      const soldApnCol = els.soldApnCol.value;
+      const masterApnCol = els.masterApnCol.value;
+      const writeFields = els.writebackFields.value
+        .split('\n')
+        .map(s => s.trim())
+        .filter(Boolean);
+
+      if (!writeFields.length) {
+        els.runMessage.className = 'callout danger';
+        els.runMessage.textContent = 'Add at least one write-back field first.';
+        return;
+      }
+
+      const soldByApn = new Map();
+      const soldConflicts = new Set();
+
+      state.sold.rows.forEach(row => {
+        const apn = normalizeApn(row[soldApnCol]);
+        if (!apn) return;
+        if (!soldByApn.has(apn)) {
+          soldByApn.set(apn, row);
+        } else {
+          soldConflicts.add(apn);
+        }
+      });
+
+      const output = state.master.rows.map(r => ({ ...r }));
+      const review = [];
+      const audit = [];
+      let updated = 0;
+      let needsReview = 0;
+
+      output.forEach(row => {
+        const apn = normalizeApn(row[masterApnCol]);
+        if (!apn) {
+          audit.push({
+            mode: 'writeback',
+            master_row: row.__rownum,
+            apn: '',
+            action: 'skipped_no_apn',
+            note: 'Master row missing APN'
+          });
+          return;
+        }
+
+        if (soldConflicts.has(apn)) {
+          needsReview += 1;
+          review.push({
+            issue_type: 'duplicate_sold_rows_same_apn',
+            master_row: row.__rownum,
+            apn,
+            note: 'Multiple sold rows share this APN. Resolve sold file first.'
+          });
+          audit.push({
+            mode: 'writeback',
+            master_row: row.__rownum,
+            apn,
+            action: 'held_for_review_duplicate_sold_apn',
+            note: 'Multiple sold rows found for APN'
+          });
+          return;
+        }
+
+        const soldRow = soldByApn.get(apn);
+        if (!soldRow) {
+          audit.push({
+            mode: 'writeback',
+            master_row: row.__rownum,
+            apn,
+            action: 'no_sold_match',
+            note: 'No sold record found for APN'
+          });
+          return;
+        }
+
+        writeFields.forEach(field => {
+          row[field] = soldRow[field] ?? '';
+        });
+        row.__sold_writeback_status = 'updated_from_sold_file';
+        updated += 1;
+        audit.push({
+          mode: 'writeback',
+          master_row: row.__rownum,
+          apn,
+          action: 'updated_master_row',
+          note: `Copied fields: ${writeFields.join(' | ')}`
+        });
+      });
+
+      state.mode = 'writeback';
+      state.result = {
+        primaryRows: output,
+        reviewRows: review,
+        auditRows: audit,
+        primaryFilename: 'master-data-with-sold-writeback.csv',
+        reviewFilename: 'master-data-writeback-review-queue.csv',
+        auditFilename: 'master-data-writeback-audit-log.csv'
+      };
+
+      updateRunUi({
+        updated,
+        needsReview,
+        message: `Write-back complete. ${updated.toLocaleString()} master rows updated by APN. ${needsReview.toLocaleString()} rows need review.`
+      });
+    }
+
+    function updateRunUi({ updated, needsReview, message }) {
+      els.metricUpdated.textContent = updated.toLocaleString();
+      els.metricReview.textContent = needsReview.toLocaleString();
+      els.runMessage.className = needsReview ? 'callout warn' : 'callout ok';
+      els.runMessage.textContent = message;
+      els.lastRunLabel.textContent = `Last run: ${new Date().toLocaleString()}`;
+      renderTable(els.previewTable, state.result.primaryRows.slice(0, 25));
+      renderTable(els.reviewTable, state.result.reviewRows.slice(0, 100));
+      renderTable(els.auditTable, state.result.auditRows.slice(0, 100));
+      els.downloadPrimary.disabled = false;
+      els.downloadReview.disabled = state.result.reviewRows.length === 0;
+      els.downloadAudit.disabled = state.result.auditRows.length === 0;
+      els.downloadHint.textContent = `${state.result.primaryFilename} ready.`;
+    }
+
+    function renderTable(table, rows) {
+      if (!rows || !rows.length) {
+        table.innerHTML = '<thead><tr><th>No rows</th></tr></thead><tbody><tr><td>Nothing to show.</td></tr></tbody>';
+        return;
+      }
+      const headers = Object.keys(rows[0]);
+      const thead = `<thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
+      const tbody = `<tbody>${rows.map(row => `<tr>${headers.map(h => `<td>${escapeHtml(row[h])}</td>`).join('')}</tr>`).join('')}</tbody>`;
+      table.innerHTML = thead + tbody;
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function downloadCsvFromState(kind) {
+      if (!state.result) return;
+      let rows, filename;
+      if (kind === 'primary') {
+        rows = state.result.primaryRows;
+        filename = state.result.primaryFilename;
+      } else if (kind === 'review') {
+        rows = state.result.reviewRows;
+        filename = state.result.reviewFilename;
+      } else {
+        rows = state.result.auditRows;
+        filename = state.result.auditFilename;
+      }
+      const blob = new Blob([toCsv(rows)], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function resetAll() {
+      state.sold = null;
+      state.master = null;
+      state.result = null;
+      state.mode = null;
+      els.soldFile.value = '';
+      els.masterFile.value = '';
+      els.soldFileMeta.textContent = '';
+      els.masterFileMeta.textContent = '';
+      els.soldAddressCol.innerHTML = '';
+      els.soldApnCol.innerHTML = '';
+      els.masterAddressCol.innerHTML = '';
+      els.masterApnCol.innerHTML = '';
+      els.writebackFields.value = '';
+      els.metricSoldRows.textContent = '0';
+      els.metricMasterRows.textContent = '0';
+      els.metricUpdated.textContent = '0';
+      els.metricReview.textContent = '0';
+      els.runMessage.className = 'callout';
+      els.runMessage.textContent = 'Upload files to begin.';
+      els.lastRunLabel.textContent = 'No run yet';
+      renderTable(els.previewTable, []);
+      renderTable(els.reviewTable, []);
+      renderTable(els.auditTable, []);
+      els.downloadPrimary.disabled = true;
+      els.downloadReview.disabled = true;
+      els.downloadAudit.disabled = true;
+      els.downloadHint.textContent = 'No generated files yet.';
+      refreshStateUI();
+    }
+
+    resetAll();
+  </script>
+</body>
+</html>
